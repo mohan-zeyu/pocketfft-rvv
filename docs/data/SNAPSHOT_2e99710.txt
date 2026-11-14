@@ -1,0 +1,10 @@
+commit 2e99710bf7c95709d82f512f8407ec45ab96bea6
+c9aa534cd4c4791517f2f6a7d5473166  pocketfft_hdronly.h
+98647d7036fd2cb217d6ff53ab606d46  pocketfft_rvv.h
+e559b70adc2f322c4f61f87867e162c7  pocketfft_rvv_real.h
+dc04331f062d98c0
+9ffbbe4ac559b139
+a98eb7d247abe33a
+snapshot 2026-11-08T12:19:20Z
+ M pocketfft_hdronly.h
+ M pocketfft_rvv.h

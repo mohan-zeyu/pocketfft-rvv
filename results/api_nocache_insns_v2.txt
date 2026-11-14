@@ -1,0 +1,4 @@
+n=256     rv64gc-scalar     33533  rvv     18230
+n=1024    rv64gc-scalar    115605  rvv     38554
+n=4096    rv64gc-scalar    453387  rvv    129748
+n=65536   rv64gc-scalar   9077497  rvv   2067047

@@ -1,0 +1,341 @@
+--- /home/user/fft-rvv/work/pocketfft_hdronly.orig.h	2026-11-08 11:11:32.696924800 +0000
++++ /home/user/fft-rvv/pocketfft_hdronly.h	2026-11-08 12:18:08.782801049 +0000
+@@ -158,6 +158,13 @@
+ 
+ template<typename T> struct VLEN { static constexpr size_t val=1; };
+ 
++#if defined(__riscv_vector) && defined(__riscv_v_intrinsic) && (__riscv_v_intrinsic >= 12000) && !defined(POCKETFFT_NO_RVV)
++#include <riscv_vector.h>
++#if defined(__linux__)
++#include <sys/auxv.h>
++#endif
++#endif
++
+ #ifndef POCKETFFT_NO_VECTORS
+ #if (defined(__AVX512F__))
+ template<> struct VLEN<float> { static constexpr size_t val=16; };
+@@ -339,6 +346,10 @@
+ template<bool fwd, typename T> void ROTX90(cmplx<T> &a)
+   { auto tmp_= fwd ? -a.r : a.r; a.r = fwd ? a.i : -a.i; a.i=tmp_; }
+ 
++#define POCKETFFT_RVV_INSIDE_DETAIL
++#include "pocketfft_rvv.h"
++#undef POCKETFFT_RVV_INSIDE_DETAIL
++
+ //
+ // twiddle factor section
+ //
+@@ -414,6 +425,20 @@
+       auto x1=v1[idx&mask], x2=v2[idx>>shift];
+       return cmplx<T>(T(x1.r*x2.r-x1.i*x2.i), -T(x1.r*x2.i+x1.i*x2.r));
+       }
++
++    // dst[2t], dst[2t+1] = (*this)[start+t*step] for t < count (interleaved re/im storage)
++    void fill(T *dst, size_t count, size_t start, size_t step) const
++      {
++#ifdef POCKETFFT_RVV
++      if (rvv::enabled() && rvv::fill_twiddles(dst, count, start, step, v1.data(), v2.data(), mask, shift, N))
++        return;
++#endif
++      for (size_t t=0; t<count; ++t)
++        {
++        auto v = (*this)[start+t*step];
++        dst[2*t] = v.r; dst[2*t+1] = v.i;
++        }
++      }
+   };
+ 
+ struct util // hack to avoid duplicate symbols
+@@ -1638,6 +1663,31 @@
+     }
+   }
+ 
++// ---- dispatch between the scalar/generic-vector passes and the RVV passes --------------------
++// Generic element type T (incl. the batched generic-vector type): scalar template code.
++template<bool fwd, typename T> void pass2_d(size_t ido, size_t l1, const T *cc, T *ch, const cmplx<T0> *wa) const { pass2<fwd>(ido,l1,cc,ch,wa); }
++template<bool fwd, typename T> void pass3_d(size_t ido, size_t l1, const T *cc, T *ch, const cmplx<T0> *wa) const { pass3<fwd>(ido,l1,cc,ch,wa); }
++template<bool fwd, typename T> void pass4_d(size_t ido, size_t l1, const T *cc, T *ch, const cmplx<T0> *wa) const { pass4<fwd>(ido,l1,cc,ch,wa); }
++template<bool fwd, typename T> void pass5_d(size_t ido, size_t l1, const T *cc, T *ch, const cmplx<T0> *wa) const { pass5<fwd>(ido,l1,cc,ch,wa); }
++template<bool fwd, typename T> void pass8_d(size_t ido, size_t l1, const T *cc, T *ch, const cmplx<T0> *wa) const { pass8<fwd>(ido,l1,cc,ch,wa); }
++template<typename T> void scale_copy_d(T *c, const T *src, size_t n, T0 fct) const
++  { for (size_t i=0; i<n; ++i) c[i] = src[i]*fct; }
++#ifdef POCKETFFT_RVV
++// Plain cmplx<T0> arrays (single 1-D transforms): RVV passes when the V extension is available.
++template<bool fwd> void pass2_d(size_t ido, size_t l1, const cmplx<rvv::real_t<T0>> *cc, cmplx<rvv::real_t<T0>> *ch, const cmplx<T0> *wa) const
++  { if (rvv::enabled()) rvv::pass2<fwd>(ido,l1,cc,ch,wa); else pass2<fwd>(ido,l1,cc,ch,wa); }
++template<bool fwd> void pass3_d(size_t ido, size_t l1, const cmplx<rvv::real_t<T0>> *cc, cmplx<rvv::real_t<T0>> *ch, const cmplx<T0> *wa) const
++  { if (rvv::enabled()) rvv::pass3<fwd>(ido,l1,cc,ch,wa); else pass3<fwd>(ido,l1,cc,ch,wa); }
++template<bool fwd> void pass4_d(size_t ido, size_t l1, const cmplx<rvv::real_t<T0>> *cc, cmplx<rvv::real_t<T0>> *ch, const cmplx<T0> *wa) const
++  { if (rvv::enabled()) rvv::pass4<fwd>(ido,l1,cc,ch,wa); else pass4<fwd>(ido,l1,cc,ch,wa); }
++template<bool fwd> void pass5_d(size_t ido, size_t l1, const cmplx<rvv::real_t<T0>> *cc, cmplx<rvv::real_t<T0>> *ch, const cmplx<T0> *wa) const
++  { if (rvv::enabled()) rvv::pass5<fwd>(ido,l1,cc,ch,wa); else pass5<fwd>(ido,l1,cc,ch,wa); }
++template<bool fwd> void pass8_d(size_t ido, size_t l1, const cmplx<rvv::real_t<T0>> *cc, cmplx<rvv::real_t<T0>> *ch, const cmplx<T0> *wa) const
++  { if (rvv::enabled()) rvv::pass8<fwd>(ido,l1,cc,ch,wa); else pass8<fwd>(ido,l1,cc,ch,wa); }
++void scale_copy_d(cmplx<rvv::real_t<T0>> *c, const cmplx<rvv::real_t<T0>> *src, size_t n, T0 fct) const
++  { if (rvv::enabled()) rvv::scale_copy(c, src, n, fct); else for (size_t i=0; i<n; ++i) c[i] = src[i]*fct; }
++#endif
++
+ template<bool fwd, typename T> void pass_all(T c[], T0 fct) const
+   {
+   if (length==1) { c[0]*=fct; return; }
+@@ -1651,15 +1701,15 @@
+     size_t l2=ip*l1;
+     size_t ido = length/l2;
+     if     (ip==4)
+-      pass4<fwd> (ido, l1, p1, p2, fact[k1].tw);
++      pass4_d<fwd> (ido, l1, p1, p2, fact[k1].tw);
+     else if(ip==8)
+-      pass8<fwd>(ido, l1, p1, p2, fact[k1].tw);
++      pass8_d<fwd>(ido, l1, p1, p2, fact[k1].tw);
+     else if(ip==2)
+-      pass2<fwd>(ido, l1, p1, p2, fact[k1].tw);
++      pass2_d<fwd>(ido, l1, p1, p2, fact[k1].tw);
+     else if(ip==3)
+-      pass3<fwd> (ido, l1, p1, p2, fact[k1].tw);
++      pass3_d<fwd> (ido, l1, p1, p2, fact[k1].tw);
+     else if(ip==5)
+-      pass5<fwd> (ido, l1, p1, p2, fact[k1].tw);
++      pass5_d<fwd> (ido, l1, p1, p2, fact[k1].tw);
+     else if(ip==7)
+       pass7<fwd> (ido, l1, p1, p2, fact[k1].tw);
+     else if(ip==11)
+@@ -1675,15 +1725,13 @@
+   if (p1!=c)
+     {
+     if (fct!=1.)
+-      for (size_t i=0; i<length; ++i)
+-        c[i] = ch[i]*fct;
++      scale_copy_d(c, ch.data(), length, fct);
+     else
+       std::copy_n (p1, length, c);
+     }
+   else
+     if (fct!=1.)
+-      for (size_t i=0; i<length; ++i)
+-        c[i] *= fct;
++      scale_copy_d(c, c, length, fct);
+   }
+ 
+   public:
+@@ -1739,14 +1787,12 @@
+         fact[k].tw=mem.data()+memofs;
+         memofs+=(ip-1)*(ido-1);
+         for (size_t j=1; j<ip; ++j)
+-          for (size_t i=1; i<ido; ++i)
+-            fact[k].tw[(j-1)*(ido-1)+i-1] = twiddle[j*l1*i];
++          twiddle.fill(reinterpret_cast<T0 *>(fact[k].tw+(j-1)*(ido-1)), ido-1, j*l1, j*l1);
+         if (ip>11)
+           {
+           fact[k].tws=mem.data()+memofs;
+           memofs+=ip;
+-          for (size_t j=0; j<ip; ++j)
+-            fact[k].tws[j] = twiddle[j*l1*ido];
++          twiddle.fill(reinterpret_cast<T0 *>(fact[k].tws), ip, 0, l1*ido);
+           }
+         l1*=ip;
+         }
+@@ -1764,6 +1810,13 @@
+       }
+   };
+ 
++} // namespace detail
++} // namespace POCKETFFT_NAMESPACE
++#include "pocketfft_rvv.h"
++#include "pocketfft_rvv_real.h"
++namespace POCKETFFT_NAMESPACE {
++namespace detail {
++
+ //
+ // real-valued FFTPACK transforms
+ //
+@@ -2426,6 +2479,79 @@
+     }
+   }
+ 
++// dispatch helpers: the generic template forwards to the scalar pass; for plain real arrays
++// (T == T0 == float/double, i.e. single 1-D transforms) the RVV implementation is used when available.
++template<typename T> void radf2_d(size_t ido, size_t l1,
++  const T * POCKETFFT_RESTRICT cc, T * POCKETFFT_RESTRICT ch,
++  const T0 * POCKETFFT_RESTRICT wa) const
++  { radf2(ido, l1, cc, ch, wa); }
++template<typename T> void radf3_d(size_t ido, size_t l1,
++  const T * POCKETFFT_RESTRICT cc, T * POCKETFFT_RESTRICT ch,
++  const T0 * POCKETFFT_RESTRICT wa) const
++  { radf3(ido, l1, cc, ch, wa); }
++template<typename T> void radf4_d(size_t ido, size_t l1,
++  const T * POCKETFFT_RESTRICT cc, T * POCKETFFT_RESTRICT ch,
++  const T0 * POCKETFFT_RESTRICT wa) const
++  { radf4(ido, l1, cc, ch, wa); }
++template<typename T> void radf5_d(size_t ido, size_t l1,
++  const T * POCKETFFT_RESTRICT cc, T * POCKETFFT_RESTRICT ch,
++  const T0 * POCKETFFT_RESTRICT wa) const
++  { radf5(ido, l1, cc, ch, wa); }
++template<typename T> void radb2_d(size_t ido, size_t l1,
++  const T * POCKETFFT_RESTRICT cc, T * POCKETFFT_RESTRICT ch,
++  const T0 * POCKETFFT_RESTRICT wa) const
++  { radb2(ido, l1, cc, ch, wa); }
++template<typename T> void radb3_d(size_t ido, size_t l1,
++  const T * POCKETFFT_RESTRICT cc, T * POCKETFFT_RESTRICT ch,
++  const T0 * POCKETFFT_RESTRICT wa) const
++  { radb3(ido, l1, cc, ch, wa); }
++template<typename T> void radb4_d(size_t ido, size_t l1,
++  const T * POCKETFFT_RESTRICT cc, T * POCKETFFT_RESTRICT ch,
++  const T0 * POCKETFFT_RESTRICT wa) const
++  { radb4(ido, l1, cc, ch, wa); }
++template<typename T> void radb5_d(size_t ido, size_t l1,
++  const T * POCKETFFT_RESTRICT cc, T * POCKETFFT_RESTRICT ch,
++  const T0 * POCKETFFT_RESTRICT wa) const
++  { radb5(ido, l1, cc, ch, wa); }
++#ifdef POCKETFFT_RVV
++void radf2_d(size_t ido, size_t l1,
++  const rvv::real_t<T0> * POCKETFFT_RESTRICT cc, rvv::real_t<T0> * POCKETFFT_RESTRICT ch,
++  const T0 * POCKETFFT_RESTRICT wa) const
++  { if (rvv::enabled()) rvv::radf2(ido, l1, cc, ch, wa); else radf2(ido, l1, cc, ch, wa); }
++void radf3_d(size_t ido, size_t l1,
++  const rvv::real_t<T0> * POCKETFFT_RESTRICT cc, rvv::real_t<T0> * POCKETFFT_RESTRICT ch,
++  const T0 * POCKETFFT_RESTRICT wa) const
++  { if (rvv::enabled()) rvv::radf3(ido, l1, cc, ch, wa); else radf3(ido, l1, cc, ch, wa); }
++void radf4_d(size_t ido, size_t l1,
++  const rvv::real_t<T0> * POCKETFFT_RESTRICT cc, rvv::real_t<T0> * POCKETFFT_RESTRICT ch,
++  const T0 * POCKETFFT_RESTRICT wa) const
++  { if (rvv::enabled()) rvv::radf4(ido, l1, cc, ch, wa); else radf4(ido, l1, cc, ch, wa); }
++void radf5_d(size_t ido, size_t l1,
++  const rvv::real_t<T0> * POCKETFFT_RESTRICT cc, rvv::real_t<T0> * POCKETFFT_RESTRICT ch,
++  const T0 * POCKETFFT_RESTRICT wa) const
++  { if (rvv::enabled()) rvv::radf5(ido, l1, cc, ch, wa); else radf5(ido, l1, cc, ch, wa); }
++void radb2_d(size_t ido, size_t l1,
++  const rvv::real_t<T0> * POCKETFFT_RESTRICT cc, rvv::real_t<T0> * POCKETFFT_RESTRICT ch,
++  const T0 * POCKETFFT_RESTRICT wa) const
++  { if (rvv::enabled()) rvv::radb2(ido, l1, cc, ch, wa); else radb2(ido, l1, cc, ch, wa); }
++void radb3_d(size_t ido, size_t l1,
++  const rvv::real_t<T0> * POCKETFFT_RESTRICT cc, rvv::real_t<T0> * POCKETFFT_RESTRICT ch,
++  const T0 * POCKETFFT_RESTRICT wa) const
++  { if (rvv::enabled()) rvv::radb3(ido, l1, cc, ch, wa); else radb3(ido, l1, cc, ch, wa); }
++void radb4_d(size_t ido, size_t l1,
++  const rvv::real_t<T0> * POCKETFFT_RESTRICT cc, rvv::real_t<T0> * POCKETFFT_RESTRICT ch,
++  const T0 * POCKETFFT_RESTRICT wa) const
++  { if (rvv::enabled()) rvv::radb4(ido, l1, cc, ch, wa); else radb4(ido, l1, cc, ch, wa); }
++void radb5_d(size_t ido, size_t l1,
++  const rvv::real_t<T0> * POCKETFFT_RESTRICT cc, rvv::real_t<T0> * POCKETFFT_RESTRICT ch,
++  const T0 * POCKETFFT_RESTRICT wa) const
++  { if (rvv::enabled()) rvv::radb5(ido, l1, cc, ch, wa); else radb5(ido, l1, cc, ch, wa); }
++void copy_and_norm_d(rvv::real_t<T0> *c, rvv::real_t<T0> *p1, T0 fct) const
++  { if (rvv::enabled() && fct!=T0(1)) rvv::real_scale_copy(c, p1, length, fct); else copy_and_norm(c, p1, fct); }
++#endif
++template<typename T> void copy_and_norm_d(T *c, T *p1, T0 fct) const
++  { copy_and_norm(c, p1, fct); }
++
+     template<typename T> void copy_and_norm(T *c, T *p1, T0 fct) const
+       {
+       if (p1!=c)
+@@ -2458,13 +2584,13 @@
+           size_t ido=length / l1;
+           l1 /= ip;
+           if(ip==4)
+-            radf4(ido, l1, p1, p2, fact[k].tw);
++            radf4_d(ido, l1, p1, p2, fact[k].tw);
+           else if(ip==2)
+-            radf2(ido, l1, p1, p2, fact[k].tw);
++            radf2_d(ido, l1, p1, p2, fact[k].tw);
+           else if(ip==3)
+-            radf3(ido, l1, p1, p2, fact[k].tw);
++            radf3_d(ido, l1, p1, p2, fact[k].tw);
+           else if(ip==5)
+-            radf5(ido, l1, p1, p2, fact[k].tw);
++            radf5_d(ido, l1, p1, p2, fact[k].tw);
+           else
+             { radfg(ido, ip, l1, p1, p2, fact[k].tw, fact[k].tws); std::swap (p1,p2); }
+           std::swap (p1,p2);
+@@ -2475,20 +2601,20 @@
+           size_t ip = fact[k].fct,
+                  ido= length/(ip*l1);
+           if(ip==4)
+-            radb4(ido, l1, p1, p2, fact[k].tw);
++            radb4_d(ido, l1, p1, p2, fact[k].tw);
+           else if(ip==2)
+-            radb2(ido, l1, p1, p2, fact[k].tw);
++            radb2_d(ido, l1, p1, p2, fact[k].tw);
+           else if(ip==3)
+-            radb3(ido, l1, p1, p2, fact[k].tw);
++            radb3_d(ido, l1, p1, p2, fact[k].tw);
+           else if(ip==5)
+-            radb5(ido, l1, p1, p2, fact[k].tw);
++            radb5_d(ido, l1, p1, p2, fact[k].tw);
+           else
+             radbg(ido, ip, l1, p1, p2, fact[k].tw, fact[k].tws);
+           std::swap (p1,p2);
+           l1*=ip;
+           }
+ 
+-      copy_and_norm(c,p1,fct);
++      copy_and_norm_d(c,p1,fct);
+       }
+ 
+   private:
+@@ -2538,11 +2664,7 @@
+           {
+           fact[k].tw=ptr; ptr+=(ip-1)*(ido-1);
+           for (size_t j=1; j<ip; ++j)
+-            for (size_t i=1; i<=(ido-1)/2; ++i)
+-              {
+-              fact[k].tw[(j-1)*(ido-1)+2*i-2] = twid[j*l1*i].r;
+-              fact[k].tw[(j-1)*(ido-1)+2*i-1] = twid[j*l1*i].i;
+-              }
++            twid.fill(fact[k].tw+(j-1)*(ido-1), (ido-1)/2, j*l1, j*l1);
+           }
+         if (ip>5) // special factors required by *g functions
+           {
+@@ -3310,6 +3432,10 @@
+   const cndarr<T> &src, T *POCKETFFT_RESTRICT dst)
+   {
+   if (dst == &src[it.iofs(0)]) return;  // in-place
++#ifdef POCKETFFT_RVV
++  if (it.stride_in()==ptrdiff_t(sizeof(T)) && rvv::enabled())
++    { rvv::copy_bytes(dst, &src[it.iofs(0)], it.length_in()*sizeof(T)); return; }
++#endif
+   for (size_t i=0; i<it.length_in(); ++i)
+     dst[i] = src[it.iofs(i)];
+   }
+@@ -3334,6 +3460,10 @@
+   const T *POCKETFFT_RESTRICT src, ndarr<T> &dst)
+   {
+   if (src == &dst[it.oofs(0)]) return;  // in-place
++#ifdef POCKETFFT_RVV
++  if (it.stride_out()==ptrdiff_t(sizeof(T)) && rvv::enabled())
++    { rvv::copy_bytes(&dst[it.oofs(0)], src, it.length_out()*sizeof(T)); return; }
++#endif
+   for (size_t i=0; i<it.length_out(); ++i)
+     dst[it.oofs(i)] = src[i];
+   }
+@@ -3543,6 +3673,15 @@
+       plan->exec(tdata, fct, true);
+       out[it.oofs(0)].Set(tdata[0]);
+       size_t i=1, ii=1;
++#ifdef POCKETFFT_RVV
++      if (len>2 && it.stride_out()==ptrdiff_t(sizeof(cmplx<T>)) && rvv::enabled())
++        {
++        size_t npairs = (len-1)/2;
++        rvv::unpack_halfcomplex(reinterpret_cast<cmplx<rvv::real_t<T>> *>(&out[it.oofs(0)]), tdata, npairs, !forward);
++        i += 2*npairs; ii += npairs;
++        }
++      else
++#endif
+       if (forward)
+         for (; i<len-1; i+=2, ++ii)
+           out[it.oofs(ii)].Set(tdata[i], tdata[i+1]);
+@@ -3605,6 +3744,15 @@
+         tdata[0]=in[it.iofs(0)].r;
+         {
+         size_t i=1, ii=1;
++#ifdef POCKETFFT_RVV
++        if (len>2 && it.stride_in()==ptrdiff_t(sizeof(cmplx<T>)) && rvv::enabled())
++          {
++          size_t npairs = (len-1)/2;
++          rvv::pack_halfcomplex(reinterpret_cast<rvv::real_t<T> *>(tdata), &in[it.iofs(0)], npairs, forward);
++          i += 2*npairs; ii += npairs;
++          }
++        else
++#endif
+         if (forward)
+           for (; i<len-1; i+=2, ++ii)
+             {

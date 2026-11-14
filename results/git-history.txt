@@ -1,0 +1,9 @@
+b1add00 Correctness report: logged 828-case NumPy sweep replaces placeholder
+7002d2d Docs: final design document, extended correctness report, performance report (25 generated tables), README
+13bfcab Complete final measurement matrix (374 rows) and regenerated report tables
+b408cc8 Final matrix (cache=0 complete), regenerated performance tables, native x86 FFTW comparison, correctness report
+0f826ea Docs: design document, correctness report, performance report draft, README; x86 native FFTW comparison
+31e33be Harness: FFTW oracle (fft_check), fft_bench, scripts; correctness CSVs (1080/1080 pass at VLEN 128/256/512); framework call-site test; LMUL experiment; packaging script
+d1a003c RVV pack/unpack of half-complex layout in general_r2c/general_c2r; final measurement script
+2e99710 Merge RVV real-FFT passes (radf/radb 2/3/4/5), always_inline helper layer, GCC no-schedule attribute, real_t dispatch guard, contiguous copy fast path
+3b58513 pocketfft RVV: complex passes (radix 2/3/4/5/8), vectorized twiddle generation, tests, harness
